@@ -41,6 +41,7 @@
 #include <px4_platform_common/getopt.h>
 
 #include <algorithm>
+#include <cstring>
 #include <iostream>
 #include <string>
 
@@ -166,6 +167,8 @@ int GZBridge::init()
 	}
 
 #endif // CONFIG_MODULES_GIMBAL
+
+	_pose_hold_pub = _node.Advertise<gz::msgs::StringMsg>("/pose_hold");
 
 	ScheduleNow();
 	return OK;
@@ -1108,8 +1111,38 @@ int GZBridge::print_status()
 	return 0;
 }
 
+int GZBridge::sendPoseHold(const std::string &command)
+{
+	gz::msgs::StringMsg msg;
+	msg.set_data(_model_name + " " + command);
+
+	if (!_pose_hold_pub.Valid() || !_pose_hold_pub.Publish(msg)) {
+		PX4_ERR("failed to publish pose command");
+		return PX4_ERROR;
+	}
+
+	return PX4_OK;
+}
+
 int GZBridge::custom_command(int argc, char *argv[])
 {
+	if (argc >= 2 && !strcmp(argv[0], "pose")) {
+		GZBridge *instance = get_instance<GZBridge>(desc);
+
+		if (!instance) {
+			PX4_ERR("not running");
+			return PX4_ERROR;
+		}
+
+		std::string command;
+
+		for (int i = 1; i < argc; i++) {
+			command += (i > 1 ? " " : "") + std::string(argv[i]);
+		}
+
+		return instance->sendPoseHold(command);
+	}
+
 	return print_usage("unknown command");
 }
 
@@ -1129,6 +1162,9 @@ int GZBridge::print_usage(const char *reason)
 	PRINT_MODULE_USAGE_COMMAND("start");
 	PRINT_MODULE_USAGE_PARAM_STRING('w', nullptr, nullptr, "World name", true);
 	PRINT_MODULE_USAGE_PARAM_STRING('n', nullptr, nullptr, "Model name", false);
+	PRINT_MODULE_USAGE_COMMAND_DESCR("pose", "Hold, rotate or release the vehicle (PoseHoldSystem gz plugin)");
+	PRINT_MODULE_USAGE_ARG("<level|nose_down|tail_down|left_down|right_down|inverted|rotate|release>",
+			       "Pose command", false);
 	PRINT_MODULE_USAGE_DEFAULT_COMMANDS();
 
 	return 0;

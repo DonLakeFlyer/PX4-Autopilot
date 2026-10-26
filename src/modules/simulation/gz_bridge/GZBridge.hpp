@@ -107,6 +107,9 @@ public:
 	/** @see ModuleBase::print_status() */
 	int print_status() override;
 
+	/** Forward a command to the PoseHoldSystem gz plugin, addressed to this vehicle. */
+	int sendPoseHold(const std::string &command);
+
 private:
 	friend class GZBridgeTestPeer;
 
@@ -210,6 +213,7 @@ private:
 
 	bool _realtime_clock_set{false};
 	gz::transport::Node _node;
+	gz::transport::Node::Publisher _pose_hold_pub;
 
 	// GPS noise model
 	float _gnss_pos_noise_n[_MAX_GNSS_SENSORS] {0.0f, 0.0f};
