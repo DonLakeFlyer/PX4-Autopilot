@@ -38,6 +38,7 @@
 #include <gz/sim/System.hh>
 #include <gz/transport/Node.hh>
 
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -77,6 +78,7 @@ private:
 	Mode _mode{Mode::Free};
 	gz::math::Quaterniond _orientation;
 	gz::math::Vector3d _position;
+	double _heading{0.};
 };
 
 } // namespace custom

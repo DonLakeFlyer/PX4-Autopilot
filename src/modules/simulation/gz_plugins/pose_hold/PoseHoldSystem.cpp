@@ -43,6 +43,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <sstream>
 #include <vector>
 
@@ -95,7 +96,7 @@ void PoseHoldSystem::commandCallback(const gz::msgs::StringMsg &msg)
 
 void PoseHoldSystem::setStatic(gz::sim::EntityComponentManager &ecm, bool is_static)
 {
-	setCommand<gz::sim::components::StaticCmd>(ecm, _target, is_static);
+	setCommand<gz::sim::components::Static>(ecm, _target, is_static);
 }
 
 void PoseHoldSystem::handleCommand(const std::string &command, gz::sim::EntityComponentManager &ecm)
@@ -106,7 +107,6 @@ void PoseHoldSystem::handleCommand(const std::string &command, gz::sim::EntityCo
 		std::string token;
 
 		while (stream >> token) {
-			std::transform(token.begin(), token.end(), token.begin(), [](unsigned char c) { return std::tolower(c); });
 			tokens.push_back(token);
 		}
 	}
@@ -122,6 +122,17 @@ void PoseHoldSystem::handleCommand(const std::string &command, gz::sim::EntityCo
 	const gz::sim::Entity named = world.ModelByName(ecm, tokens[0]);
 
 	if (named != gz::sim::kNullEntity) {
+		if (tokens.size() < 2) {
+			gzerr << "[PoseHoldSystem] Missing command after model name [" << tokens[0] << "]" << std::endl;
+			return;
+		}
+
+		// Do not leave the previous vehicle frozen when switching to another one
+		if (_target != gz::sim::kNullEntity && _target != named && _mode != Mode::Free) {
+			setStatic(ecm, false);
+			_mode = Mode::Free;
+		}
+
 		_target = named;
 		first = 1;
 
@@ -136,12 +147,14 @@ void PoseHoldSystem::handleCommand(const std::string &command, gz::sim::EntityCo
 		}
 	}
 
-	if (_target == gz::sim::kNullEntity || first >= tokens.size()) {
+	if (_target == gz::sim::kNullEntity) {
 		gzerr << "[PoseHoldSystem] No target model for command [" << command << "]" << std::endl;
 		return;
 	}
 
-	const std::string &verb = tokens[first];
+	std::string verb = tokens[first];
+	std::transform(verb.begin(), verb.end(), verb.begin(), [](unsigned char c) { return std::tolower(c); });
+
 	const gz::sim::Model model(_target);
 	const gz::math::Pose3d current = gz::sim::worldPose(_target, ecm);
 
@@ -158,6 +171,7 @@ void PoseHoldSystem::handleCommand(const std::string &command, gz::sim::EntityCo
 			_position = current.Pos();
 			_position.Z(std::max(_position.Z(), kMinHoldHeight));
 			_orientation = current.Rot();
+			_heading = current.Rot().Yaw();
 		}
 
 		_mode = Mode::Rotate;
@@ -194,9 +208,14 @@ void PoseHoldSystem::handleCommand(const std::string &command, gz::sim::EntityCo
 		return;
 	}
 
+	// Yaw read back from a pose at +-90 deg pitch is ill-defined, so reuse the tracked heading once held
+	if (_mode == Mode::Free) {
+		_heading = current.Rot().Yaw();
+	}
+
 	_position = current.Pos();
 	_position.Z(std::max(_position.Z(), kMinHoldHeight));
-	_orientation = gz::math::Quaterniond(roll, pitch, current.Rot().Yaw());
+	_orientation = gz::math::Quaterniond(roll, pitch, _heading);
 	_mode = Mode::Hold;
 	setStatic(ecm, true);
 	gzmsg << "[PoseHoldSystem] Holding " << model.Name(ecm) << " " << verb << std::endl;
@@ -223,6 +242,7 @@ void PoseHoldSystem::PreUpdate(const gz::sim::UpdateInfo &info, gz::sim::EntityC
 		const double dt = std::chrono::duration<double>(info.dt).count();
 		const gz::math::Quaterniond delta(0., 0., kRotateRateRadS * dt);
 		_orientation = (delta * _orientation).Normalized();
+		_heading += kRotateRateRadS * dt;
 
 		// Dynamic body: command the rates too so the IMU sees the rotation, and cancel gravity drift.
 		// The angular velocity command is applied in the body frame.

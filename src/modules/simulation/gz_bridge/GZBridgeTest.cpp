@@ -40,12 +40,23 @@
 #include <uORB/topics/failure_injection.h>
 #include <uORB/topics/sensor_gnss.h>
 
+#include <atomic>
+#include <chrono>
+#include <mutex>
+#include <string>
+#include <thread>
+
 class GZBridgeTestPeer
 {
 public:
 	static void navSatCallback(GZBridge &bridge, const gz::msgs::NavSat &message)
 	{
 		bridge.navSatCallback(message, 0);
+	}
+
+	static void advertisePoseHold(GZBridge &bridge, const std::string &topic)
+	{
+		bridge._pose_hold_pub = bridge._node.Advertise<gz::msgs::StringMsg>(topic);
 	}
 };
 
@@ -122,4 +133,42 @@ TEST(GZBridge, AppliesGpsFailureInjectionAtNavSatPublication)
 	EXPECT_EQ(recovered.fix_type, sensor_gnss_s::FIX_TYPE_3D);
 	EXPECT_NE(recovered.latitude, baseline.latitude);
 	EXPECT_NE(recovered.longitude, baseline.longitude);
+}
+
+TEST(GZBridge, PoseHoldFailsWithoutPublisher)
+{
+	GZBridge bridge{"default", "x500"};
+
+	EXPECT_EQ(bridge.sendPoseHold("nose_down"), PX4_ERROR);
+}
+
+TEST(GZBridge, PoseHoldPrefixesModelNameToCommand)
+{
+	static constexpr const char *kTestTopic = "/pose_hold_gz_bridge_test";
+
+	GZBridge bridge{"default", "x500"};
+	GZBridgeTestPeer::advertisePoseHold(bridge, kTestTopic);
+
+	std::mutex mutex;
+	std::string received;
+	std::atomic<bool> got_message{false};
+
+	gz::transport::Node subscriber;
+	ASSERT_TRUE(subscriber.Subscribe<gz::msgs::StringMsg>(kTestTopic, [&](const gz::msgs::StringMsg & msg) {
+		std::lock_guard<std::mutex> lock(mutex);
+		received = msg.data();
+		got_message = true;
+	}));
+
+	// Messages published before topic discovery completes are dropped, so retry until delivered.
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+
+	while (!got_message && std::chrono::steady_clock::now() < deadline) {
+		EXPECT_EQ(bridge.sendPoseHold("nose_down"), PX4_OK);
+		std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	}
+
+	ASSERT_TRUE(got_message);
+	std::lock_guard<std::mutex> lock(mutex);
+	EXPECT_EQ(received, "x500 nose_down");
 }
